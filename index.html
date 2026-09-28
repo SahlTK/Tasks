@@ -2,14 +2,32 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Daily Tasks</title>
+<meta name="theme-color" content="#0b0f14">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tasks">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <link rel="stylesheet" href="style.css">
+<script>try{var k=localStorage.getItem('daily-tasks-skin');if(k&&k!=='system')document.documentElement.dataset.skin=k}catch(e){}</script>
 </head>
 <body>
 <header>
   <h1>Daily Tasks</h1>
   <nav>
+    <select id="skin" aria-label="Theme">
+      <option value="system">Theme: Auto</option>
+      <option value="midnight">Midnight</option>
+      <option value="neon">Neon</option>
+      <option value="forest">Forest</option>
+      <option value="sunset">Sunset</option>
+      <option value="mono">Mono</option>
+      <option value="sky">Sky</option>
+    </select>
     <button data-view="tasks" class="tab active">Tasks</button>
     <button data-view="map" class="tab">Mind map</button>
   </nav>
@@ -54,9 +72,11 @@
   </details>
   <div class="footer-actions">
     <button id="carry" title="Copy unfinished tasks from the previous day with tasks">Carry over unfinished</button>
-    <button id="export">Export</button>
-    <label class="btn">Import<input type="file" id="import" accept="application/json" hidden></label>
+    <button id="export">Export (copy)</button>
+    <label class="btn">Import file<input type="file" id="import" accept="application/json" hidden></label>
   </div>
+  <textarea id="backup" hidden aria-label="Backup data"></textarea>
+  <button id="paste-import" hidden>Import pasted text</button>
 </main>
 
 <main id="map-view" hidden>

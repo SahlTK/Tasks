@@ -1,4 +1,11 @@
 const KEY = 'daily-tasks-v1';
+let toastTimer;
+function toast(msg) {
+  let t = document.getElementById('toast');
+  if (!t) { t = document.createElement('div'); t.id = 'toast'; t.setAttribute('role', 'status'); document.body.append(t); }
+  t.textContent = msg; t.hidden = false;
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, 3500);
+}
 const $ = id => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
 
@@ -14,7 +21,7 @@ function loadRules() {
   try { return JSON.parse(localStorage.getItem(RKEY)) || []; } catch { return []; }
 }
 function saveRules() {
-  try { localStorage.setItem(RKEY, JSON.stringify(rules)); } catch { alert('Could not save (storage blocked or full).'); }
+  try { localStorage.setItem(RKEY, JSON.stringify(rules)); } catch { toast('Could not save (storage blocked or full).'); }
 }
 function matches(r, ds) {
   const d = parse(ds);
@@ -42,7 +49,7 @@ function materialize(upTo) {
   if (changed) { save(); saveRules(); }
 }
 function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { alert('Could not save (storage blocked or full).'); }
+  try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { toast('Could not save (storage blocked or full).'); }
 }
 function iso(d) {
   const p = n => String(n).padStart(2, '0');
@@ -108,7 +115,7 @@ $('r-form').onsubmit = e => {
   const freq = $('r-freq').value;
   const days = [...document.querySelectorAll('#r-days input:checked')].map(i => +i.value);
   if (!text) return;
-  if (freq === 'weekly' && !days.length) return alert('Pick at least one weekday.');
+  if (freq === 'weekly' && !days.length) return toast('Pick at least one weekday.');
   // starts on the day you're viewing (the earliest a repeat can appear)
   rules.push({ id: uid(), text, freq, days, start: current, last: shift(current, -1) });
   $('r-text').value = '';
@@ -132,9 +139,9 @@ $('date').onchange = e => { if (e.target.value) go(e.target.value); };
 
 $('carry').onclick = () => {
   const prev = Object.keys(data).filter(d => d < current).sort().pop();
-  if (!prev) return alert('No earlier day with tasks.');
+  if (!prev) return toast('No earlier day with tasks.');
   const open = data[prev].filter(t => !t.done && !t.rid);
-  if (!open.length) return alert(`Nothing unfinished on ${nice(prev)}.`);
+  if (!open.length) return toast(`Nothing unfinished on ${nice(prev)}.`);
   const have = new Set((data[current] || []).map(t => t.text));
   const add = open.filter(t => !have.has(t.text));
   (data[current] ||= []).push(...add.map(t => ({ id: uid(), text: t.text, done: false })));
@@ -142,37 +149,57 @@ $('carry').onclick = () => {
   save(); render();
 };
 $('export').onclick = () => {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ version: 2, days: data, rules }, null, 2)], { type: 'application/json' }));
-  a.download = 'tasks-backup.json';
-  a.click();
-  URL.revokeObjectURL(a.href);
+  const box = $('backup');
+  box.hidden = false; $('paste-import').hidden = false;
+  box.value = JSON.stringify({ version: 2, days: data, rules }, null, 2);
+  box.select();
+  try { navigator.clipboard.writeText(box.value).then(() => toast('Backup copied. Paste it into a notes app.'), () => toast('Select the text below and copy it.')); }
+  catch { toast('Select the text below and copy it.'); }
 };
-$('import').onchange = async e => {
-  const f = e.target.files[0];
-  if (!f) return;
+function importText(text) {
   try {
-    const raw = JSON.parse(await f.text());
+    const raw = JSON.parse(text);
     if (typeof raw !== 'object' || !raw || Array.isArray(raw)) throw 0;
     const obj = raw.version === 2 ? raw.days : raw;   // v1 backups are just the days
     if (!obj || typeof obj !== 'object') throw 0;
+    const dateRe = /^\d{4}-\d\d-\d\d$/;
     if (raw.version === 2 && Array.isArray(raw.rules)) {
       const have = new Set(rules.map(r => r.id));
       for (const r of raw.rules) {
-        if (r && typeof r.text === 'string' && ['daily', 'weekly', 'monthly'].includes(r.freq) && /^\d{4}-\d\d-\d\d$/.test(r.start) && /^\d{4}-\d\d-\d\d$/.test(r.last) && !have.has(r.id))
+        if (r && typeof r.text === 'string' && ['daily', 'weekly', 'monthly'].includes(r.freq) && dateRe.test(r.start) && dateRe.test(r.last) && !have.has(r.id))
           rules.push({ id: r.id || uid(), text: r.text, freq: r.freq, days: Array.isArray(r.days) ? r.days.filter(n => n >= 0 && n <= 6) : [], start: r.start, last: r.last });
       }
       saveRules();
     }
     for (const [d, list] of Object.entries(obj)) {
-      if (!/^\d{4}-\d\d-\d\d$/.test(d) || !Array.isArray(list)) throw 0;
+      if (!dateRe.test(d) || !Array.isArray(list)) throw 0;
       const cur = (data[d] ||= []);
       const ids = new Set(cur.map(t => t.id));
       for (const t of list) if (t && typeof t.text === 'string' && !ids.has(t.id)) cur.push({ id: t.id || uid(), text: t.text, done: !!t.done, ...(t.rid ? { rid: t.rid } : {}) });
     }
-    save(); render();
-  } catch { alert('Invalid backup file.'); }
+    save(); render(); toast('Backup imported.');
+  } catch { toast('That is not a valid backup.'); }
+}
+$('import').onchange = async e => {
+  const f = e.target.files[0];
+  if (f) importText(await f.text());
   e.target.value = '';
+};
+$('paste-import').onclick = () => importText($('backup').value);
+
+/* ---------- Skins ---------- */
+const SKIN_KEY = 'daily-tasks-skin';
+function applySkin(name) {
+  const root = document.documentElement;
+  if (name && name !== 'system') root.dataset.skin = name; else delete root.dataset.skin;
+  const m = document.querySelector('meta[name=theme-color]');
+  if (m) m.content = getComputedStyle(root).getPropertyValue('--card').trim() || '#0b0f14';
+  Object.assign(COL, readMapColors());
+  if (typeof Wb !== 'undefined') { if (!cv.hidden && !$('map-view').hidden) wake(0); if (!Wb.raf && !cv.hidden) paint(); }
+}
+$('skin').onchange = () => {
+  try { localStorage.setItem(SKIN_KEY, $('skin').value); } catch {}
+  applySkin($('skin').value);
 };
 
 /* ---------- Tabs ---------- */
@@ -303,7 +330,12 @@ $('fit').onclick = () => $('mode').value === 'web' ? fitWeb() : fitView();
 
 /* ---------- Web (force-directed) map ---------- */
 const cv = $('web'), cx = cv.getContext('2d');
-const COL = { open: '#5fb8ff', done: '#5fe08f', rec: '#f2a65a', day: '#e9edf5', root: '#6ff29a' };
+const COL = {};
+function readMapColors() {
+  const st = getComputedStyle(document.documentElement), g = n => st.getPropertyValue(n).trim();
+  return { open: g('--c-open'), done: g('--c-done'), rec: g('--c-rec'), day: g('--c-day'), root: g('--c-root'), bg: g('--map-bg') };
+}
+Object.assign(COL, readMapColors());
 const Wb = { nodes: [], links: [], alpha: 1, k: 1, tx: 0, ty: 0, raf: 0, hover: null, drag: null, pan: null, touched: false, ticks: 0, w: 0, h: 0, dpr: 1 };
 
 function sizeWeb() {
@@ -321,21 +353,21 @@ function drawWeb() {
   let days = Object.keys(data).filter(d => data[d].length).sort();
   if (range) { const cut = shift(iso(new Date()), -(range - 1)); days = days.filter(d => d >= cut); }
   const nodes = [], links = [];
-  const root = { id: 'root', type: 'root', r: 15, label: 'My days', color: COL.root, x: 0, y: 0, vx: 0, vy: 0 };
+  const root = { id: 'root', type: 'root', r: 15, label: 'My days', color: 'root', x: 0, y: 0, vx: 0, vy: 0 };
   nodes.push(root);
   const rand = () => (Math.random() - .5);
   let prev = null;
   const byRule = {};
   days.forEach((d, i) => {
     const ang = i / Math.max(days.length, 1) * Math.PI * 2;
-    const dn = { id: 'd' + d, type: 'day', date: d, r: 9, label: nice(d), color: COL.day, x: Math.cos(ang) * 120, y: Math.sin(ang) * 120, vx: 0, vy: 0 };
+    const dn = { id: 'd' + d, type: 'day', date: d, r: 9, label: nice(d), color: 'day', x: Math.cos(ang) * 120, y: Math.sin(ang) * 120, vx: 0, vy: 0 };
     nodes.push(dn);
     links.push({ a: root, b: dn, len: 70, str: .5, kind: 'day' });
     if (prev) links.push({ a: prev, b: dn, len: 90, str: .12, kind: 'next' });
     prev = dn;
     for (const t of data[d]) {
       const tn = { id: t.id, type: 'task', r: 5, label: (t.rid ? '↻ ' : '') + t.text, done: t.done, date: d,
-        color: t.done ? COL.done : t.rid ? COL.rec : COL.open, x: dn.x + rand() * 60, y: dn.y + rand() * 60, vx: 0, vy: 0 };
+        color: t.done ? 'done' : t.rid ? 'rec' : 'open', x: dn.x + rand() * 60, y: dn.y + rand() * 60, vx: 0, vy: 0 };
       nodes.push(tn);
       links.push({ a: dn, b: tn, len: 34, str: .7, kind: 'task' });
       if (t.rid) { const p = byRule[t.rid]; if (p) links.push({ a: p, b: tn, len: 110, str: .04, kind: 'repeat' }); byRule[t.rid] = tn; }
@@ -417,8 +449,8 @@ function paint() {
   cx.lineCap = 'round';
   for (const l of Wb.links) {
     const lit = hov && (l.a === hov || l.b === hov);
-    cx.globalAlpha = hov ? (lit ? .95 : .12) : (l.kind === 'day' ? .55 : l.kind === 'task' ? .45 : .3);
-    cx.strokeStyle = l.kind === 'repeat' ? COL.rec : l.kind === 'next' ? '#9fb0c8' : '#7d8da3';
+    cx.globalAlpha = hov ? (lit ? .95 : .12) : (l.kind === 'day' ? .5 : l.kind === 'task' ? .4 : .28);
+    cx.strokeStyle = l.kind === 'repeat' ? COL.rec : l.kind === 'next' ? COL.day : COL.root;
     cx.lineWidth = (lit ? 1.6 : 1) / k;
     cx.setLineDash(l.kind === 'repeat' ? [4 / k, 4 / k] : []);
     cx.beginPath(); cx.moveTo(l.a.x, l.a.y); cx.lineTo(l.b.x, l.b.y); cx.stroke();
@@ -426,10 +458,11 @@ function paint() {
   cx.setLineDash([]);
   for (const n of Wb.nodes) {
     cx.globalAlpha = hov && !near.has(n) ? .25 : 1;
-    cx.shadowColor = n.color; cx.shadowBlur = (n === hov ? 22 : 12) * k;
-    cx.fillStyle = '#0a0e13'; cx.strokeStyle = n.color; cx.lineWidth = (n.type === 'task' ? 1.6 : 2) / k;
+    const nc = COL[n.color];
+    cx.shadowColor = nc; cx.shadowBlur = (n === hov ? 22 : 12) * k;
+    cx.fillStyle = COL.bg; cx.strokeStyle = nc; cx.lineWidth = (n.type === 'task' ? 1.6 : 2) / k;
     cx.beginPath(); cx.arc(n.x, n.y, n.r, 0, 7); cx.fill(); cx.stroke();
-    if (n.type === 'task' && n.done) { cx.shadowBlur = 0; cx.fillStyle = n.color; cx.beginPath(); cx.arc(n.x, n.y, n.r * .45, 0, 7); cx.fill(); }
+    if (n.type === 'task' && n.done) { cx.shadowBlur = 0; cx.fillStyle = nc; cx.beginPath(); cx.arc(n.x, n.y, n.r * .45, 0, 7); cx.fill(); }
   }
   cx.shadowBlur = 0; cx.globalAlpha = 1;
   // labels: days always, tasks when zoomed in or highlighted
@@ -507,4 +540,10 @@ function showTip(n, e) {
   t.style.top = (e.clientY - r.top + 14) + 'px';
 }
 
+try { const sk = localStorage.getItem(SKIN_KEY); if (sk) $('skin').value = sk; } catch {}
+if (!$('skin').value) $('skin').value = 'system';
+applySkin($('skin').value);
+function sizeHeader() { document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px'); }
+sizeHeader(); addEventListener('resize', sizeHeader);
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
 render();
