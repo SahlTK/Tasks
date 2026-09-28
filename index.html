@@ -61,6 +61,9 @@
 
 <main id="map-view" hidden>
   <div class="map-bar">
+    <label>View
+      <select id="mode"><option value="web" selected>Web</option><option value="tree">Tree</option></select>
+    </label>
     <label>Show
       <select id="range">
         <option value="7">last 7 days</option>
@@ -69,10 +72,16 @@
         <option value="0">all days</option>
       </select>
     </label>
-    <span class="muted">Drag to pan, scroll to zoom, click a day to open it.</span>
+    <span class="legend">
+      <i style="--c:#5fb8ff"></i>Open <i style="--c:#5fe08f"></i>Done <i style="--c:#f2a65a"></i>Recurring <i style="--c:#e9edf5"></i>Day
+    </span>
     <button id="fit">Fit</button>
   </div>
-  <svg id="map"></svg>
+  <div id="stage">
+    <canvas id="web"></canvas>
+    <svg id="map" hidden></svg>
+  </div>
+  <p class="hint muted">Drag to pan or move nodes, scroll to zoom, click a day to open it. Hover a node to read it.</p>
 </main>
 
 <script src="app.js"></script>

@@ -181,7 +181,7 @@ document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
   const map = b.dataset.view === 'map';
   $('map-view').hidden = !map;
   $('tasks-view').hidden = map;
-  if (map) drawMap(true);
+  if (map) drawMap(true); else stopWeb();
 });
 
 /* ---------- Mind map ---------- */
@@ -198,6 +198,10 @@ function el(name, attrs = {}, parent) {
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + '…' : s;
 
 function drawMap(fit) {
+  const web = $('mode').value === 'web';
+  svg.hidden = web; $('web').hidden = !web;
+  if (web) { drawWeb(); return; }
+  stopWeb();
   svg.replaceChildren();
   const range = +$('range').value;
   let days = Object.keys(data).filter(d => data[d].length).sort().reverse();
@@ -294,6 +298,213 @@ svg.addEventListener('wheel', e => {
   applyView();
 }, { passive: false });
 $('range').onchange = () => drawMap(true);
-$('fit').onclick = fitView;
+$('mode').onchange = () => drawMap(true);
+$('fit').onclick = () => $('mode').value === 'web' ? fitWeb() : fitView();
+
+/* ---------- Web (force-directed) map ---------- */
+const cv = $('web'), cx = cv.getContext('2d');
+const COL = { open: '#5fb8ff', done: '#5fe08f', rec: '#f2a65a', day: '#e9edf5', root: '#6ff29a' };
+const Wb = { nodes: [], links: [], alpha: 1, k: 1, tx: 0, ty: 0, raf: 0, hover: null, drag: null, pan: null, touched: false, ticks: 0, w: 0, h: 0, dpr: 1 };
+
+function sizeWeb() {
+  const r = cv.getBoundingClientRect();
+  Wb.dpr = window.devicePixelRatio || 1;
+  Wb.w = r.width; Wb.h = r.height;
+  cv.width = Math.max(1, r.width * Wb.dpr); cv.height = Math.max(1, r.height * Wb.dpr);
+  wake(0);
+}
+new ResizeObserver(() => { if (!$('map-view').hidden && !cv.hidden) sizeWeb(); }).observe($('stage'));
+
+function drawWeb() {
+  sizeWeb();
+  const range = +$('range').value;
+  let days = Object.keys(data).filter(d => data[d].length).sort();
+  if (range) { const cut = shift(iso(new Date()), -(range - 1)); days = days.filter(d => d >= cut); }
+  const nodes = [], links = [];
+  const root = { id: 'root', type: 'root', r: 15, label: 'My days', color: COL.root, x: 0, y: 0, vx: 0, vy: 0 };
+  nodes.push(root);
+  const rand = () => (Math.random() - .5);
+  let prev = null;
+  const byRule = {};
+  days.forEach((d, i) => {
+    const ang = i / Math.max(days.length, 1) * Math.PI * 2;
+    const dn = { id: 'd' + d, type: 'day', date: d, r: 9, label: nice(d), color: COL.day, x: Math.cos(ang) * 120, y: Math.sin(ang) * 120, vx: 0, vy: 0 };
+    nodes.push(dn);
+    links.push({ a: root, b: dn, len: 70, str: .5, kind: 'day' });
+    if (prev) links.push({ a: prev, b: dn, len: 90, str: .12, kind: 'next' });
+    prev = dn;
+    for (const t of data[d]) {
+      const tn = { id: t.id, type: 'task', r: 5, label: (t.rid ? '↻ ' : '') + t.text, done: t.done, date: d,
+        color: t.done ? COL.done : t.rid ? COL.rec : COL.open, x: dn.x + rand() * 60, y: dn.y + rand() * 60, vx: 0, vy: 0 };
+      nodes.push(tn);
+      links.push({ a: dn, b: tn, len: 34, str: .7, kind: 'task' });
+      if (t.rid) { const p = byRule[t.rid]; if (p) links.push({ a: p, b: tn, len: 110, str: .04, kind: 'repeat' }); byRule[t.rid] = tn; }
+    }
+  });
+  Object.assign(Wb, { nodes, links, alpha: 1, ticks: 0, hover: null, touched: false, empty: !days.length });
+  fitWeb();
+  wake(1);
+}
+function fitWeb() {
+  const ns = Wb.nodes;
+  if (!ns.length || !Wb.w) return;
+  let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+  for (const n of ns) { x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y); }
+  const pad = 50, w = Math.max(x1 - x0, 80), h = Math.max(y1 - y0, 80);
+  Wb.k = Math.min((Wb.w - pad * 2) / w, (Wb.h - pad * 2) / h, 2.2);
+  Wb.tx = Wb.w / 2 - (x0 + x1) / 2 * Wb.k;
+  Wb.ty = Wb.h / 2 - (y0 + y1) / 2 * Wb.k;
+  Wb.touched = false;
+  wake(0);
+}
+function wake(a) { Wb.alpha = Math.max(Wb.alpha, a); if (!Wb.raf && !$('map-view').hidden && !cv.hidden) Wb.raf = requestAnimationFrame(loop); }
+function stopWeb() { cancelAnimationFrame(Wb.raf); Wb.raf = 0; }
+
+function step() {
+  const ns = Wb.nodes, al = Wb.alpha;
+  for (let i = 0; i < ns.length; i++) {
+    const a = ns[i];
+    for (let j = i + 1; j < ns.length; j++) {
+      const b = ns[j];
+      let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy;
+      if (d2 > 90000) continue;
+      if (d2 < 1) { dx = Math.random() - .5; dy = Math.random() - .5; d2 = 1; }
+      const f = 420 * al / d2, d = Math.sqrt(d2);
+      dx = dx / d * f; dy = dy / d * f;
+      a.vx += dx; a.vy += dy; b.vx -= dx; b.vy -= dy;
+    }
+  }
+  for (const l of Wb.links) {
+    const dx = l.b.x - l.a.x, dy = l.b.y - l.a.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+    const f = (d - l.len) / d * l.str * al * .5;
+    l.a.vx += dx * f; l.a.vy += dy * f; l.b.vx -= dx * f; l.b.vy -= dy * f;
+  }
+  for (const n of ns) {
+    n.vx -= n.x * .012 * al; n.vy -= n.y * .012 * al;
+    if (n === Wb.drag) { n.vx = n.vy = 0; continue; }
+    n.vx *= .82; n.vy *= .82;
+    n.x += n.vx; n.y += n.vy;
+  }
+  Wb.alpha *= .985;
+  if (Wb.alpha < .004) Wb.alpha = 0;
+}
+function loop() {
+  Wb.raf = 0;
+  if ($('map-view').hidden || cv.hidden) return;
+  if (Wb.alpha > 0 || Wb.drag) {
+    step(); Wb.ticks++;
+    if (!Wb.touched && Wb.ticks % 8 === 0 && Wb.ticks < 240) fitWeb();
+  }
+  paint();
+  if (Wb.alpha > 0 || Wb.drag) Wb.raf = requestAnimationFrame(loop);
+}
+function neighbors(n) {
+  const s = new Set([n]);
+  for (const l of Wb.links) { if (l.a === n) s.add(l.b); if (l.b === n) s.add(l.a); }
+  return s;
+}
+function paint() {
+  const { k, tx, ty, dpr } = Wb;
+  cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  cx.clearRect(0, 0, Wb.w, Wb.h);
+  if (Wb.empty) {
+    cx.fillStyle = '#8b94a3'; cx.font = '14px system-ui,sans-serif'; cx.textAlign = 'center';
+    cx.fillText('No tasks in this range yet. Add some in the Tasks tab.', Wb.w / 2, Wb.h / 2);
+    return;
+  }
+  cx.setTransform(dpr * k, 0, 0, dpr * k, dpr * tx, dpr * ty);
+  const hov = Wb.hover, near = hov ? neighbors(hov) : null;
+  cx.lineCap = 'round';
+  for (const l of Wb.links) {
+    const lit = hov && (l.a === hov || l.b === hov);
+    cx.globalAlpha = hov ? (lit ? .95 : .12) : (l.kind === 'day' ? .55 : l.kind === 'task' ? .45 : .3);
+    cx.strokeStyle = l.kind === 'repeat' ? COL.rec : l.kind === 'next' ? '#9fb0c8' : '#7d8da3';
+    cx.lineWidth = (lit ? 1.6 : 1) / k;
+    cx.setLineDash(l.kind === 'repeat' ? [4 / k, 4 / k] : []);
+    cx.beginPath(); cx.moveTo(l.a.x, l.a.y); cx.lineTo(l.b.x, l.b.y); cx.stroke();
+  }
+  cx.setLineDash([]);
+  for (const n of Wb.nodes) {
+    cx.globalAlpha = hov && !near.has(n) ? .25 : 1;
+    cx.shadowColor = n.color; cx.shadowBlur = (n === hov ? 22 : 12) * k;
+    cx.fillStyle = '#0a0e13'; cx.strokeStyle = n.color; cx.lineWidth = (n.type === 'task' ? 1.6 : 2) / k;
+    cx.beginPath(); cx.arc(n.x, n.y, n.r, 0, 7); cx.fill(); cx.stroke();
+    if (n.type === 'task' && n.done) { cx.shadowBlur = 0; cx.fillStyle = n.color; cx.beginPath(); cx.arc(n.x, n.y, n.r * .45, 0, 7); cx.fill(); }
+  }
+  cx.shadowBlur = 0; cx.globalAlpha = 1;
+  // labels: days always, tasks when zoomed in or highlighted
+  cx.textAlign = 'center'; cx.textBaseline = 'top';
+  for (const n of Wb.nodes) {
+    const few = Wb.nodes.length;
+    const show = (near && near.has(n)) || (n.type === 'task' ? (k > 3 || few < 25) : (k > 1.5 || few < 40));
+    if (!show || (hov && !near.has(n))) continue;
+    const size = 11 / k;
+    cx.font = `${size}px system-ui,sans-serif`;
+    cx.fillStyle = n.type === 'task' ? '#c8d0dc' : '#e9edf5';
+    cx.fillText(n.label.length > 26 ? n.label.slice(0, 25) + '…' : n.label, n.x, n.y + n.r + 3 / k);
+  }
+}
+function worldPt(e) {
+  const r = cv.getBoundingClientRect();
+  return { x: (e.clientX - r.left - Wb.tx) / Wb.k, y: (e.clientY - r.top - Wb.ty) / Wb.k };
+}
+function pick(p) {
+  let best = null, bd = 1e9;
+  for (const n of Wb.nodes) {
+    const d = Math.hypot(n.x - p.x, n.y - p.y), lim = n.r + 5 / Wb.k;
+    if (d < lim && d < bd) { best = n; bd = d; }
+  }
+  return best;
+}
+let webDown = null;
+cv.addEventListener('pointerdown', e => {
+  const p = worldPt(e), n = pick(p);
+  webDown = { x: e.clientX, y: e.clientY, n, moved: false, tx: Wb.tx, ty: Wb.ty };
+  cv.setPointerCapture(e.pointerId);
+  if (n) { Wb.drag = n; wake(.3); }
+});
+cv.addEventListener('pointermove', e => {
+  if (webDown) {
+    const dx = e.clientX - webDown.x, dy = e.clientY - webDown.y;
+    if (Math.hypot(dx, dy) > 4) webDown.moved = true;
+    if (webDown.moved) {
+      Wb.touched = true;
+      if (webDown.n) { const p = worldPt(e); webDown.n.x = p.x; webDown.n.y = p.y; wake(.3); }
+      else { Wb.tx = webDown.tx + dx; Wb.ty = webDown.ty + dy; cv.style.cursor = 'grabbing'; wake(0); }
+      if (!Wb.raf) paint();
+    }
+    return;
+  }
+  const n = pick(worldPt(e));
+  if (n !== Wb.hover) { Wb.hover = n; cv.style.cursor = n ? 'pointer' : 'grab'; showTip(n, e); if (!Wb.raf) paint(); }
+  else if (n) showTip(n, e);
+});
+function endWeb(e) {
+  if (!webDown) return;
+  const d = webDown; webDown = null; Wb.drag = null; cv.style.cursor = Wb.hover ? 'pointer' : 'grab';
+  if (!d.moved && d.n && d.n.type === 'day') { go(d.n.date); document.querySelector('[data-view=tasks]').click(); }
+  else if (!d.moved && d.n && d.n.type === 'task') { go(d.n.date); document.querySelector('[data-view=tasks]').click(); }
+}
+cv.addEventListener('pointerup', endWeb);
+cv.addEventListener('pointercancel', endWeb);
+cv.addEventListener('pointerleave', () => { if (!webDown) { Wb.hover = null; showTip(null); if (!Wb.raf) paint(); } });
+cv.addEventListener('wheel', e => {
+  e.preventDefault();
+  const r = cv.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+  const f = e.deltaY > 0 ? 1 / 1.12 : 1.12, nk = Math.min(6, Math.max(.15, Wb.k * f));
+  Wb.tx = mx - (mx - Wb.tx) * nk / Wb.k; Wb.ty = my - (my - Wb.ty) * nk / Wb.k; Wb.k = nk;
+  Wb.touched = true; wake(0); if (!Wb.raf) paint();
+}, { passive: false });
+
+function showTip(n, e) {
+  let t = document.getElementById('tip');
+  if (!t) { t = document.createElement('div'); t.id = 'tip'; $('stage').append(t); }
+  if (!n) { t.hidden = true; return; }
+  t.hidden = false;
+  t.textContent = n.type === 'task' ? `${n.label}${n.done ? ' ✓' : ''} · ${nice(n.date)}` : n.label;
+  const r = cv.getBoundingClientRect();
+  t.style.left = Math.min(e.clientX - r.left + 14, r.width - 220) + 'px';
+  t.style.top = (e.clientY - r.top + 14) + 'px';
+}
 
 render();
