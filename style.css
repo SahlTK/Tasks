@@ -42,3 +42,16 @@ button:hover,.btn:hover{border-color:var(--accent)}
 #map .task circle{fill:var(--line)}
 #map .task.done circle{fill:var(--done)}
 #map .empty{fill:var(--muted)}
+
+#recurring{margin-top:16px;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+#recurring summary{cursor:pointer;font-weight:600}
+#r-form{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+#r-form>input{flex:1;min-width:140px}
+#r-days{display:flex;gap:10px;flex-wrap:wrap;width:100%}
+#r-days label{display:flex;align-items:center;gap:4px}
+#r-days input{width:auto}
+#rules{list-style:none;padding:0;margin:8px 0 0}
+#rules li{display:flex;align-items:center;gap:10px;padding:6px 0;border-top:1px solid var(--line)}
+#rules li span{flex:1}
+#rules .del{border:0;background:none;color:var(--muted)}
+#r-days[hidden]{display:none}

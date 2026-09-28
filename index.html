@@ -29,6 +29,29 @@
     <button>Add</button>
   </form>
   <ul id="list"></ul>
+  <details id="recurring">
+    <summary>Recurring tasks</summary>
+    <form id="r-form">
+      <input id="r-text" placeholder="e.g. Gym" autocomplete="off" required>
+      <select id="r-freq">
+        <option value="daily">Every day</option>
+        <option value="weekly">Weekly</option>
+        <option value="monthly">Monthly</option>
+      </select>
+      <div id="r-days" hidden>
+        <label><input type="checkbox" value="1">Mon</label>
+        <label><input type="checkbox" value="2">Tue</label>
+        <label><input type="checkbox" value="3">Wed</label>
+        <label><input type="checkbox" value="4">Thu</label>
+        <label><input type="checkbox" value="5">Fri</label>
+        <label><input type="checkbox" value="6">Sat</label>
+        <label><input type="checkbox" value="0">Sun</label>
+      </div>
+      <button>Add recurring</button>
+    </form>
+    <p class="muted">Starts on the day you're viewing. Monthly repeats on that day's date.</p>
+    <ul id="rules"></ul>
+  </details>
   <div class="footer-actions">
     <button id="carry" title="Copy unfinished tasks from the previous day with tasks">Carry over unfinished</button>
     <button id="export">Export</button>

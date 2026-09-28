@@ -2,11 +2,44 @@ const KEY = 'daily-tasks-v1';
 const $ = id => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
 
-let data = load();           // { "YYYY-MM-DD": [{id, text, done}] }
+const RKEY = 'daily-tasks-rules-v1';
+let data = load();
+let rules = loadRules();     // [{id, text, freq:'daily'|'weekly'|'monthly', days:[0-6], start, last}]           // { "YYYY-MM-DD": [{id, text, done}] }
 let current = iso(new Date());
 
 function load() {
   try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch { return {}; }
+}
+function loadRules() {
+  try { return JSON.parse(localStorage.getItem(RKEY)) || []; } catch { return []; }
+}
+function saveRules() {
+  try { localStorage.setItem(RKEY, JSON.stringify(rules)); } catch { alert('Could not save (storage blocked or full).'); }
+}
+function matches(r, ds) {
+  const d = parse(ds);
+  if (r.freq === 'daily') return true;
+  if (r.freq === 'weekly') return r.days.includes(d.getDay());
+  const sd = parse(r.start).getDate();
+  const lastDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+  return d.getDate() === Math.min(sd, lastDay);   // day 31 falls on the month's last day
+}
+// Create recurring tasks for every day up to `upTo` once; deleting one later won't bring it back.
+function materialize(upTo) {
+  let changed = false;
+  for (const r of rules) {
+    let d = shift(r.last, 1), n = 0;
+    while (d <= upTo && n++ < 1500) {
+      if (matches(r, d)) {
+        const list = (data[d] ||= []);
+        if (!list.some(t => t.rid === r.id)) list.push({ id: uid(), text: r.text, done: false, rid: r.id });
+        changed = true;
+      }
+      r.last = d;
+      d = shift(d, 1);
+    }
+  }
+  if (changed) { save(); saveRules(); }
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(data)); } catch { alert('Could not save (storage blocked or full).'); }
@@ -22,6 +55,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 /* ---------- Tasks view ---------- */
 function render() {
+  materialize(current > iso(new Date()) ? current : iso(new Date()));
   const tasks = data[current] || [];
   $('date').value = current;
   $('day-title').textContent = parse(current).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) + (current === iso(new Date()) ? ' (today)' : '');
@@ -36,7 +70,7 @@ function render() {
     cb.type = 'checkbox'; cb.checked = t.done;
     cb.onchange = () => { t.done = cb.checked; save(); render(); };
     const sp = document.createElement('span');
-    sp.textContent = t.text;
+    sp.textContent = (t.rid ? '↻ ' : '') + t.text;
     const del = document.createElement('button');
     del.className = 'del'; del.textContent = '✕'; del.setAttribute('aria-label', 'Delete task');
     del.onclick = () => {
@@ -47,7 +81,40 @@ function render() {
     li.append(cb, sp, del);
     ul.append(li);
   }
+  renderRules();
 }
+function renderRules() {
+  const ul = $('rules');
+  ul.replaceChildren();
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  for (const r of rules) {
+    const li = document.createElement('li');
+    const sp = document.createElement('span');
+    const when = r.freq === 'weekly' ? 'every ' + r.days.map(d => names[d]).join(', ')
+      : r.freq === 'monthly' ? `monthly on day ${parse(r.start).getDate()}` : 'every day';
+    sp.textContent = `↻ ${r.text} — ${when}`;
+    const del = document.createElement('button');
+    del.className = 'del'; del.textContent = '✕'; del.setAttribute('aria-label', 'Delete recurring task');
+    del.title = 'Stop repeating (past tasks are kept)';
+    del.onclick = () => { rules = rules.filter(x => x !== r); saveRules(); render(); };
+    li.append(sp, del);
+    ul.append(li);
+  }
+}
+$('r-freq').onchange = () => { $('r-days').hidden = $('r-freq').value !== 'weekly'; };
+$('r-form').onsubmit = e => {
+  e.preventDefault();
+  const text = $('r-text').value.trim();
+  const freq = $('r-freq').value;
+  const days = [...document.querySelectorAll('#r-days input:checked')].map(i => +i.value);
+  if (!text) return;
+  if (freq === 'weekly' && !days.length) return alert('Pick at least one weekday.');
+  // starts on the day you're viewing (the earliest a repeat can appear)
+  rules.push({ id: uid(), text, freq, days, start: current, last: shift(current, -1) });
+  $('r-text').value = '';
+  saveRules(); render();
+};
+
 function go(d) { current = d; render(); if (!$('map-view').hidden) drawMap(); }
 
 $('add').onsubmit = e => {
@@ -66,7 +133,7 @@ $('date').onchange = e => { if (e.target.value) go(e.target.value); };
 $('carry').onclick = () => {
   const prev = Object.keys(data).filter(d => d < current).sort().pop();
   if (!prev) return alert('No earlier day with tasks.');
-  const open = data[prev].filter(t => !t.done);
+  const open = data[prev].filter(t => !t.done && !t.rid);
   if (!open.length) return alert(`Nothing unfinished on ${nice(prev)}.`);
   const have = new Set((data[current] || []).map(t => t.text));
   const add = open.filter(t => !have.has(t.text));
@@ -76,7 +143,7 @@ $('carry').onclick = () => {
 };
 $('export').onclick = () => {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ version: 2, days: data, rules }, null, 2)], { type: 'application/json' }));
   a.download = 'tasks-backup.json';
   a.click();
   URL.revokeObjectURL(a.href);
@@ -85,13 +152,23 @@ $('import').onchange = async e => {
   const f = e.target.files[0];
   if (!f) return;
   try {
-    const obj = JSON.parse(await f.text());
-    if (typeof obj !== 'object' || Array.isArray(obj)) throw 0;
+    const raw = JSON.parse(await f.text());
+    if (typeof raw !== 'object' || !raw || Array.isArray(raw)) throw 0;
+    const obj = raw.version === 2 ? raw.days : raw;   // v1 backups are just the days
+    if (!obj || typeof obj !== 'object') throw 0;
+    if (raw.version === 2 && Array.isArray(raw.rules)) {
+      const have = new Set(rules.map(r => r.id));
+      for (const r of raw.rules) {
+        if (r && typeof r.text === 'string' && ['daily', 'weekly', 'monthly'].includes(r.freq) && /^\d{4}-\d\d-\d\d$/.test(r.start) && /^\d{4}-\d\d-\d\d$/.test(r.last) && !have.has(r.id))
+          rules.push({ id: r.id || uid(), text: r.text, freq: r.freq, days: Array.isArray(r.days) ? r.days.filter(n => n >= 0 && n <= 6) : [], start: r.start, last: r.last });
+      }
+      saveRules();
+    }
     for (const [d, list] of Object.entries(obj)) {
       if (!/^\d{4}-\d\d-\d\d$/.test(d) || !Array.isArray(list)) throw 0;
       const cur = (data[d] ||= []);
       const ids = new Set(cur.map(t => t.id));
-      for (const t of list) if (t && typeof t.text === 'string' && !ids.has(t.id)) cur.push({ id: t.id || uid(), text: t.text, done: !!t.done });
+      for (const t of list) if (t && typeof t.text === 'string' && !ids.has(t.id)) cur.push({ id: t.id || uid(), text: t.text, done: !!t.done, ...(t.rid ? { rid: t.rid } : {}) });
     }
     save(); render();
   } catch { alert('Invalid backup file.'); }
@@ -170,7 +247,7 @@ function drawMap(fit) {
         el('rect', { x: X_TASK, y: ty - 12, width: TASKW, height: 24, rx: 8 }, tg);
         el('circle', { cx: X_TASK + 12, cy: ty, r: 4 }, tg);
         const tt = el('text', { x: X_TASK + 24, y: ty }, tg);
-        tt.textContent = clip(t.text, 24);
+        tt.textContent = clip((t.rid ? '↻ ' : '') + t.text, 24);
         el('title', {}, tg).textContent = t.text;
       });
     }
