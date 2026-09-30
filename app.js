@@ -57,21 +57,41 @@ function iso(d) {
 }
 function parse(s) { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); }
 function shift(s, n) { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); }
-function nice(s) { return parse(s).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+function nice(s) {
+  const d = parse(s), f = o => d.toLocaleDateString(undefined, o);
+  return `${f({ weekday: 'short' })} ${f({ month: 'short' })} ${d.getDate()}`;   // e.g. Wed Sep 30
+}
+function relLabel(s) {
+  const n = Math.round((parse(s) - parse(iso(new Date()))) / 864e5);
+  if (n === 0) { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; }
+  if (n === -1) return 'Yesterday';
+  if (n === 1) return 'Tomorrow';
+  return n < 0 ? `${-n} days ago` : `In ${n} days`;
+}
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 
 /* ---------- Tasks view ---------- */
-function render() {
+function render(animate) {
   materialize(current > iso(new Date()) ? current : iso(new Date()));
   const tasks = data[current] || [];
-  $('date').value = current;
-  $('day-title').textContent = parse(current).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) + (current === iso(new Date()) ? ' (today)' : '');
+  const today = iso(new Date());
+  $('eyebrow').textContent = relLabel(current);
+  $('day-title').textContent = nice(current);
+  $('today').hidden = current === today;
+  $('carry-day').textContent = nice(current);
   const done = tasks.filter(t => t.done).length;
-  $('day-stats').textContent = tasks.length ? `${done}/${tasks.length} done` : 'No tasks yet.';
+  const pct = tasks.length ? Math.round(done / tasks.length * 100) : 0;
+  $('day-stats').textContent = tasks.length ? `${done} of ${tasks.length} done` : 'No tasks yet';
+  $('ring').style.setProperty('--p', pct);
+  $('ring-text').textContent = pct + '%';
+  $('empty').hidden = tasks.length > 0;
+  renderStrip();
   const ul = $('list');
   ul.replaceChildren();
-  for (const t of tasks) {
+  ul.classList.toggle('enter', !!animate);
+  tasks.forEach((t, i) => {
     const li = document.createElement('li');
+    li.style.setProperty('--i', i);
     if (t.done) li.className = 'done';
     const cb = document.createElement('input');
     cb.type = 'checkbox'; cb.checked = t.done;
@@ -87,8 +107,28 @@ function render() {
     };
     li.append(cb, sp, del);
     ul.append(li);
-  }
+  });
   renderRules();
+}
+
+function renderStrip() {
+  const strip = $('strip'), today = iso(new Date());
+  strip.replaceChildren();
+  let sel;
+  for (let n = -10; n <= 10; n++) {
+    const d = shift(current, n), list = data[d] || [];
+    const b = document.createElement('button');
+    b.className = 'chip' + (d === current ? ' sel' : '') + (d === today ? ' today' : '') + (list.length ? (list.every(t => t.done) ? ' all' : ' has') : '');
+    const dt = parse(d);
+    b.innerHTML = '<small></small><b></b><i></i>';
+    b.children[0].textContent = dt.toLocaleDateString(undefined, { weekday: 'short' });
+    b.children[1].textContent = dt.getDate();
+    b.setAttribute('aria-label', nice(d));
+    b.onclick = () => go(d);
+    strip.append(b);
+    if (d === current) sel = b;
+  }
+  strip.scrollLeft = sel.offsetLeft - (strip.clientWidth - sel.offsetWidth) / 2;
 }
 function renderRules() {
   const ul = $('rules');
@@ -122,7 +162,7 @@ $('r-form').onsubmit = e => {
   saveRules(); render();
 };
 
-function go(d) { current = d; render(); if (!$('map-view').hidden) drawMap(); }
+function go(d) { current = d; render(true); if (!$('map-view').hidden) drawMap(); }
 
 $('add').onsubmit = e => {
   e.preventDefault();
@@ -132,10 +172,7 @@ $('add').onsubmit = e => {
   $('text').value = '';
   save(); render();
 };
-$('prev').onclick = () => go(shift(current, -1));
-$('next').onclick = () => go(shift(current, 1));
 $('today').onclick = () => go(iso(new Date()));
-$('date').onchange = e => { if (e.target.value) go(e.target.value); };
 
 $('carry').onclick = () => {
   const prev = Object.keys(data).filter(d => d < current).sort().pop();
@@ -192,23 +229,26 @@ const SKIN_KEY = 'daily-tasks-skin';
 function applySkin(name) {
   const root = document.documentElement;
   if (name && name !== 'system') root.dataset.skin = name; else delete root.dataset.skin;
+  document.querySelectorAll('.skin').forEach(b => b.classList.toggle('sel', b.dataset.skin === (name || 'system')));
   const m = document.querySelector('meta[name=theme-color]');
   if (m) m.content = getComputedStyle(root).getPropertyValue('--card').trim() || '#0b0f14';
   Object.assign(COL, readMapColors());
   if (typeof Wb !== 'undefined') { if (!cv.hidden && !$('map-view').hidden) wake(0); if (!Wb.raf && !cv.hidden) paint(); }
 }
-$('skin').onchange = () => {
-  try { localStorage.setItem(SKIN_KEY, $('skin').value); } catch {}
-  applySkin($('skin').value);
-};
+document.querySelectorAll('.skin').forEach(b => b.onclick = () => {
+  try { localStorage.setItem(SKIN_KEY, b.dataset.skin); } catch {}
+  applySkin(b.dataset.skin);
+});
 
 /* ---------- Tabs ---------- */
 document.querySelectorAll('.tab').forEach(b => b.onclick = () => {
+  const view = b.dataset.view;
   document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === b));
-  const map = b.dataset.view === 'map';
-  $('map-view').hidden = !map;
-  $('tasks-view').hidden = map;
-  if (map) drawMap(true); else stopWeb();
+  $('tasks-view').hidden = view !== 'tasks';
+  $('map-view').hidden = view !== 'map';
+  $('settings-view').hidden = view !== 'settings';
+  scrollTo(0, 0);
+  if (view === 'map') drawMap(true); else stopWeb();
 });
 
 /* ---------- Mind map ---------- */
@@ -540,10 +580,10 @@ function showTip(n, e) {
   t.style.top = (e.clientY - r.top + 14) + 'px';
 }
 
-try { const sk = localStorage.getItem(SKIN_KEY); if (sk) $('skin').value = sk; } catch {}
-if (!$('skin').value) $('skin').value = 'system';
-applySkin($('skin').value);
+let savedSkin = 'system';
+try { savedSkin = localStorage.getItem(SKIN_KEY) || 'system'; } catch {}
+applySkin(savedSkin);
 function sizeHeader() { document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px'); }
 sizeHeader(); addEventListener('resize', sizeHeader);
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
-render();
+render(true);

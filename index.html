@@ -16,37 +16,33 @@
 <script>try{var k=localStorage.getItem('daily-tasks-skin');if(k&&k!=='system')document.documentElement.dataset.skin=k}catch(e){}</script>
 </head>
 <body>
-<header>
+<header class="top">
+  <img src="icon-192.png" alt="">
   <h1>Daily Tasks</h1>
-  <nav>
-    <select id="skin" aria-label="Theme">
-      <option value="system">Theme: Auto</option>
-      <option value="midnight">Midnight</option>
-      <option value="neon">Neon</option>
-      <option value="forest">Forest</option>
-      <option value="sunset">Sunset</option>
-      <option value="mono">Mono</option>
-      <option value="sky">Sky</option>
-    </select>
-    <button data-view="tasks" class="tab active">Tasks</button>
-    <button data-view="map" class="tab">Mind map</button>
-  </nav>
 </header>
 
-<main id="tasks-view">
-  <div class="daynav">
-    <button id="prev" aria-label="Previous day">&larr;</button>
-    <input type="date" id="date">
-    <button id="next" aria-label="Next day">&rarr;</button>
-    <button id="today">Today</button>
-  </div>
-  <h2 id="day-title"></h2>
-  <p id="day-stats" class="muted"></p>
+<main id="tasks-view" class="page">
+  <section class="hero">
+    <div>
+      <p class="eyebrow" id="eyebrow">Today</p>
+      <h2 id="day-title"></h2>
+      <p id="day-stats" class="muted"></p>
+      <button id="today" class="pill" hidden>Back to today</button>
+    </div>
+    <div class="ring" id="ring" role="img" aria-label="Progress"><span id="ring-text">0%</span></div>
+  </section>
+
+  <div class="strip" id="strip" aria-label="Days"></div>
+
   <form id="add">
-    <input id="text" placeholder="Add a task and press Enter" autocomplete="off" required>
-    <button>Add</button>
+    <input id="text" placeholder="What needs doing?" autocomplete="off" enterkeyhint="done" required>
+    <button aria-label="Add task">+</button>
   </form>
   <ul id="list"></ul>
+  <div class="empty" id="empty" hidden>
+    <svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="18"/><path d="M16 25l6 6 11-13"/></svg>
+    <p>Nothing planned for this day.<br>Add a task above.</p>
+  </div>
   <details id="recurring">
     <summary>Recurring tasks</summary>
     <form id="r-form">
@@ -70,13 +66,40 @@
     <p class="muted">Starts on the day you're viewing. Monthly repeats on that day's date.</p>
     <ul id="rules"></ul>
   </details>
-  <div class="footer-actions">
-    <button id="carry" title="Copy unfinished tasks from the previous day with tasks">Carry over unfinished</button>
-    <button id="export">Export (copy)</button>
-    <label class="btn">Import file<input type="file" id="import" accept="application/json" hidden></label>
-  </div>
-  <textarea id="backup" hidden aria-label="Backup data"></textarea>
-  <button id="paste-import" hidden>Import pasted text</button>
+</main>
+
+<main id="settings-view" class="page" hidden>
+  <h2 class="page-title">Settings</h2>
+
+  <section class="panel">
+    <h3>Theme</h3>
+    <div class="skins" id="skins">
+      <button class="skin" data-skin="system" style="--a:#3b6ef5;--b:linear-gradient(135deg,#f6f7f9 50%,#14171c 50%);--c:#2f9e6a"><i></i>Auto</button>
+      <button class="skin" data-skin="midnight" style="--a:#7c9cff;--b:#0b1020;--c:#4fd8a0"><i></i>Midnight</button>
+      <button class="skin" data-skin="neon" style="--a:#ff3df2;--b:#0a0612;--c:#39ffb0"><i></i>Neon</button>
+      <button class="skin" data-skin="forest" style="--a:#6ee39a;--b:#0c1410;--c:#6fd0e0"><i></i>Forest</button>
+      <button class="skin" data-skin="sunset" style="--a:#ff7a59;--b:#170e12;--c:#ffc857"><i></i>Sunset</button>
+      <button class="skin" data-skin="mono" style="--a:#ffffff;--b:#000000;--c:#8fd0ff"><i></i>Mono</button>
+      <button class="skin" data-skin="sky" style="--a:#2563eb;--b:#eef4ff;--c:#0f9d6e"><i></i>Sky</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h3>Tasks</h3>
+    <p class="muted">Copy open tasks from the last earlier day into <b id="carry-day">this day</b>.</p>
+    <div class="row"><button id="carry">Carry over unfinished</button></div>
+  </section>
+
+  <section class="panel">
+    <h3>Backup</h3>
+    <p class="muted">Your tasks are saved on this device only. Export a copy now and then.</p>
+    <div class="row">
+      <button id="export">Export (copy)</button>
+      <label class="btn">Import file<input type="file" id="import" accept="application/json" hidden></label>
+    </div>
+    <textarea id="backup" hidden aria-label="Backup data"></textarea>
+    <button id="paste-import" hidden>Import pasted text</button>
+  </section>
 </main>
 
 <main id="map-view" hidden>
@@ -103,6 +126,12 @@
   </div>
   <p class="hint muted">Drag to pan or move nodes, scroll to zoom, click a day to open it. Hover a node to read it.</p>
 </main>
+
+<nav class="tabbar" aria-label="Main">
+  <button class="tab active" data-view="tasks"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12.5l3 3 5-6"/></svg>Tasks</button>
+  <button class="tab" data-view="map"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="2.6"/><circle cx="5" cy="6" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="17" cy="19" r="2"/><path d="M10 10.5L6.5 7.4M14 10.8l3.6-2.6M13.2 14.3l2.6 3"/></svg>Mind map</button>
+  <button class="tab" data-view="settings"><svg viewBox="0 0 24 24"><path d="M4 7h10M18 7h2M4 17h2M10 17h10"/><circle cx="16" cy="7" r="2"/><circle cx="8" cy="17" r="2"/></svg>Settings</button>
+</nav>
 
 <script src="app.js"></script>
 </body>

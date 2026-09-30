@@ -1,5 +1,5 @@
 // Offline cache: serve from cache, refresh in the background. Bump VERSION when files change.
-const VERSION = 'tasks-v1';
+const VERSION = 'tasks-v2';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
