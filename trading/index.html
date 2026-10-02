@@ -38,12 +38,15 @@
     <select id="day" aria-label="Day" disabled></select>
     <button id="btn-random" disabled title="Random day">🎲</button>
     <span class="sep"></span>
-    <button id="btn-play" disabled title="Play / pause (Space)">▶</button>
-    <button id="btn-step" disabled title="Next bar">⏭</button>
-    <select id="speed" aria-label="Speed">
-      <option value="1">1×</option><option value="5">5×</option><option value="10">10×</option>
-      <option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option>
-    </select>
+    <label class="toggle" title="Bars arrive at the real market pace and you can't pause or skip"><input type="checkbox" id="rt"> Real-time</label>
+    <span class="group" id="speed-ctl">
+      <button id="btn-play" disabled title="Play / pause (Space)">▶</button>
+      <button id="btn-step" disabled title="Next bar">⏭</button>
+      <select id="speed" aria-label="Speed">
+        <option value="1">1×</option><option value="5">5×</option><option value="10">10×</option>
+        <option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option>
+      </select>
+    </span>
     <button id="btn-demo" class="ghost" title="No key needed">Try IBM demo</button>
   </div>
 

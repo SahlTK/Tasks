@@ -16,6 +16,7 @@ let S = (() => {
   try { const s = JSON.parse(localStorage.getItem(LS)); if (s && typeof s.cash === 'number') return Object.assign(fresh(), s); } catch (e) {}
   return fresh();
 })();
+const realtime = () => S.settings.realtime !== false; // on by default: the replay runs at market pace, no pausing
 function save() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} }
 
 // ---------- trading session (one symbol at a time) ----------
@@ -302,7 +303,10 @@ function startDay(day, resumeAt) {
   $('#btn-play').disabled = false; $('#btn-step').disabled = false;
   $('#day').value = day;
   persist(); drawLines(); render();
-  if (!resumeAt) chartMsg(`<b>${ses.sym} · ${nyDate(day * 86400)}</b><br>${ctx.length ? 'Previous session shown for context. ' : ''}Press ▶ to ring the opening bell.`);
+  if (realtime()) {
+    play();
+    if (!resumeAt) toast(`${ses.sym} · ${nyDate(day * 86400)} — market open, running in real time`, 4000);
+  } else if (!resumeAt) chartMsg(`<b>${ses.sym} · ${nyDate(day * 86400)}</b><br>${ctx.length ? 'Previous session shown for context. ' : ''}Press ▶ to ring the opening bell.`);
 }
 
 // Intrabar path: open → nearer extreme → other extreme → close, so stops and limits trigger in a plausible order.
@@ -337,7 +341,7 @@ function replayTick() {
 function schedule() {
   clearTimeout(R.timer);
   if (!R.playing) return;
-  const ms = Math.max(16, R.barSec * 1000 / +$('#speed').value / STEPS);
+  const ms = Math.max(16, R.barSec * 1000 / (realtime() ? 1 : +$('#speed').value) / STEPS);
   R.timer = setTimeout(() => { replayTick(); schedule(); }, ms);
 }
 function play() {
@@ -556,6 +560,16 @@ $('#btn-reset').onclick = () => {
 };
 
 // ---------- wiring ----------
+function applyRealtime() {
+  $('#rt').checked = realtime();
+  $('#speed-ctl').hidden = realtime();
+}
+$('#rt').onchange = () => {
+  S.settings.realtime = $('#rt').checked; save(); applyRealtime();
+  if (realtime() && ses && ses.mode === 'replay' && R.day && R.i < R.day.length) play();
+  schedule();
+};
+
 function setMode(m) {
   if (ses && ses.mode !== m && !confirmLeave()) return false;
   $$('#mode button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
@@ -591,12 +605,13 @@ document.addEventListener('keydown', e => {
   if (k === 'b') submit(ticketOrder('buy'));
   else if (k === 's') submit(ticketOrder('sell'));
   else if (k === 'f') flatten('Closed');
-  else if (k === ' ' && !$('#btn-play').disabled) { e.preventDefault(); R.playing ? pause() : play(); }
+  else if (k === ' ' && !realtime() && !$('#btn-play').disabled) { e.preventDefault(); R.playing ? pause() : play(); }
 });
 setInterval(() => setSide(side), 1000); // keep Buy/Cover label in sync with the position
 
 // ---------- boot ----------
 monthOptions();
+applyRealtime();
 renderLog();
 if (ses && ses.mode === 'replay' && ses.replay) {
   $('#month').value = ses.replay.month; $('#interval').value = ses.replay.interval; $('#sym').value = ses.sym;
