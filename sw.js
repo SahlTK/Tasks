@@ -1,5 +1,5 @@
 // Offline cache: serve from cache, refresh in the background. Bump VERSION when files change.
-const VERSION = 'tasks-v2';
+const VERSION = 'tasks-v3';
 const FILES = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -10,6 +10,9 @@ self.addEventListener('activate', e => {
 });
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  // Leave the trading simulator and any cross-origin API calls (live prices) to the network.
+  const url = new URL(e.request.url);
+  if (url.origin !== location.origin || url.pathname.includes('/trading/')) return;
   e.respondWith(caches.open(VERSION).then(async cache => {
     const hit = await cache.match(e.request, { ignoreSearch: true });
     const net = fetch(e.request).then(r => { if (r.ok) cache.put(e.request, r.clone()); return r; }).catch(() => hit);
