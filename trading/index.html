@@ -38,7 +38,11 @@
     <select id="day" aria-label="Day" disabled></select>
     <button id="btn-random" disabled title="Random day">🎲</button>
     <span class="sep"></span>
-    <label class="toggle" title="Bars arrive at the real market pace and you can't pause or skip"><input type="checkbox" id="rt"> Real-time</label>
+    <label class="toggle" title="The day plays on its own, no pausing or skipping"><input type="checkbox" id="rt"> Auto-play</label>
+    <select id="daylen" aria-label="Day length" title="How long a full trading day takes">
+      <option value="5">Day = 5 min</option><option value="15">Day = 15 min</option>
+      <option value="30">Day = 30 min</option><option value="390">Day = 6.5 h (real)</option>
+    </select>
     <span class="group" id="speed-ctl">
       <button id="btn-play" disabled title="Play / pause (Space)">▶</button>
       <button id="btn-step" disabled title="Next bar">⏭</button>

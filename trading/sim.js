@@ -16,7 +16,8 @@ let S = (() => {
   try { const s = JSON.parse(localStorage.getItem(LS)); if (s && typeof s.cash === 'number') return Object.assign(fresh(), s); } catch (e) {}
   return fresh();
 })();
-const realtime = () => S.settings.realtime !== false; // on by default: the replay runs at market pace, no pausing
+const realtime = () => S.settings.realtime !== false; // on by default: the day plays by itself, no pausing
+const dayLen = () => S.settings.dayLen || 5; // minutes of real time a full trading day takes in auto-play
 function save() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} }
 
 // ---------- trading session (one symbol at a time) ----------
@@ -305,7 +306,7 @@ function startDay(day, resumeAt) {
   persist(); drawLines(); render();
   if (realtime()) {
     play();
-    if (!resumeAt) toast(`${ses.sym} · ${nyDate(day * 86400)} — market open, running in real time`, 4000);
+    if (!resumeAt) toast(`${ses.sym} · ${nyDate(day * 86400)} — market open, full day takes ${dayLen() < 390 ? dayLen() + ' min' : '6.5 h'}`, 4000);
   } else if (!resumeAt) chartMsg(`<b>${ses.sym} · ${nyDate(day * 86400)}</b><br>${ctx.length ? 'Previous session shown for context. ' : ''}Press ▶ to ring the opening bell.`);
 }
 
@@ -341,7 +342,9 @@ function replayTick() {
 function schedule() {
   clearTimeout(R.timer);
   if (!R.playing) return;
-  const ms = Math.max(16, R.barSec * 1000 / (realtime() ? 1 : +$('#speed').value) / STEPS);
+  // Auto-play stretches the whole 6.5-hour session (390 min) over the chosen day length.
+  const speed = realtime() ? 390 / dayLen() : +$('#speed').value;
+  const ms = Math.max(16, R.barSec * 1000 / speed / STEPS);
   R.timer = setTimeout(() => { replayTick(); schedule(); }, ms);
 }
 function play() {
@@ -563,7 +566,10 @@ $('#btn-reset').onclick = () => {
 function applyRealtime() {
   $('#rt').checked = realtime();
   $('#speed-ctl').hidden = realtime();
+  $('#daylen').hidden = !realtime();
+  $('#daylen').value = dayLen();
 }
+$('#daylen').onchange = () => { S.settings.dayLen = +$('#daylen').value; save(); schedule(); };
 $('#rt').onchange = () => {
   S.settings.realtime = $('#rt').checked; save(); applyRealtime();
   if (realtime() && ses && ses.mode === 'replay' && R.day && R.i < R.day.length) play();
