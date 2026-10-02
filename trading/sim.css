@@ -37,6 +37,8 @@ input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1
 .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); }
 .group { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 #sym { width: 90px; text-transform: uppercase; font-weight: 700; }
+.toggle { flex-direction: row; align-items: center; gap: 6px; font-size: 14px; color: var(--text); cursor: pointer; }
+.toggle input { accent-color: var(--accent); width: 16px; height: 16px; }
 .sep { width: 1px; height: 22px; background: var(--line); }
 .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ghost { background: transparent; }

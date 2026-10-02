@@ -38,12 +38,19 @@
     <select id="day" aria-label="Day" disabled></select>
     <button id="btn-random" disabled title="Random day">🎲</button>
     <span class="sep"></span>
-    <button id="btn-play" disabled title="Play / pause (Space)">▶</button>
-    <button id="btn-step" disabled title="Next bar">⏭</button>
-    <select id="speed" aria-label="Speed">
-      <option value="1">1×</option><option value="5">5×</option><option value="10">10×</option>
-      <option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option>
+    <label class="toggle" title="The day plays on its own, no pausing or skipping"><input type="checkbox" id="rt"> Auto-play</label>
+    <select id="daylen" aria-label="Day length" title="How long a full trading day takes">
+      <option value="5">Day = 5 min</option><option value="15">Day = 15 min</option>
+      <option value="30">Day = 30 min</option><option value="390">Day = 6.5 h (real)</option>
     </select>
+    <span class="group" id="speed-ctl">
+      <button id="btn-play" disabled title="Play / pause (Space)">▶</button>
+      <button id="btn-step" disabled title="Next bar">⏭</button>
+      <select id="speed" aria-label="Speed">
+        <option value="1">1×</option><option value="5">5×</option><option value="10">10×</option>
+        <option value="30" selected>30×</option><option value="60">60×</option><option value="120">120×</option>
+      </select>
+    </span>
     <button id="btn-demo" class="ghost" title="No key needed">Try IBM demo</button>
   </div>
 
