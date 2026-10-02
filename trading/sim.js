@@ -17,7 +17,7 @@ let S = (() => {
   return fresh();
 })();
 const realtime = () => S.settings.realtime !== false; // on by default: the day plays by itself, no pausing
-const dayLen = () => S.settings.dayLen || 5; // minutes of real time a full trading day takes in auto-play
+const dayLen = () => S.settings.dayLen ?? 5; // minutes of real time a full trading day takes in auto-play
 function save() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) {} }
 
 // ---------- trading session (one symbol at a time) ----------
@@ -30,7 +30,22 @@ const usd = (n, d) => (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US',
 const sar = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' SAR';
 const signed = n => (n > 0 ? '+' : '') + sar(n);
 const cls = n => (n > 0 ? 'up' : n < 0 ? 'down' : '');
-const round = p => (p >= 1 ? Math.round(p * 100) / 100 : Math.round(p * 10000) / 10000);
+// Meme coins come from Binance's public market data (no key, 24/7); everything else is a US stock.
+const COINS = ['DOGE', 'SHIB', 'PEPE', 'BONK', 'WIF', 'FLOKI', 'TRUMP', 'PENGU', 'BOME', 'BTC', 'ETH', 'SOL'];
+const isCrypto = sym => COINS.includes(sym) || /USDT$/.test(sym);
+const pair = sym => (/USDT$/.test(sym) ? sym : sym + 'USDT');
+const isCoin = () => !!(ses && ses.crypto);
+const unit = () => (isCoin() ? 'coins' : 'shares');
+const tz = () => (isCoin() ? 'UTC' : 'NY');
+// Price decimals follow the price's size, so a $0.00001 coin isn't rounded to zero.
+let pxDec = 2;
+function setDec(p) {
+  pxDec = p >= 10 ? 2 : p >= 1 ? (isCoin() ? 4 : 2) : Math.min(10, Math.ceil(-Math.log10(p)) + 3);
+  candles.applyOptions({ priceFormat: { type: 'price', precision: pxDec, minMove: 10 ** -pxDec } });
+  ['#opx', '#osl', '#otp'].forEach(id => { $(id).step = 10 ** -pxDec; });
+}
+const round = p => Math.round(p * 10 ** pxDec) / 10 ** pxDec;
+const px$ = n => usd(n, pxDec);
 const nyTime = t => new Date(t * 1000).toISOString().slice(11, 16);
 const nyDate = t => new Date(t * 1000).toLocaleDateString('en-US', { timeZone: 'UTC', weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
 
@@ -95,13 +110,13 @@ function fill(side, qty, px, why) {
   ses.markers.push({ time: barTime, position: side === 'buy' ? 'belowBar' : 'aboveBar', color: side === 'buy' ? '#22c55e' : '#ef4444', shape: side === 'buy' ? 'arrowUp' : 'arrowDown', text: `${side === 'buy' ? 'B' : 'S'} ${qty}` });
   candles.setMarkers(ses.markers);
   if (p.qty === 0) ses.orders = ses.orders.filter(o => !o.exit); // brackets die with the position
-  toast(`${why ? why + ': ' : ''}${side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${ses.sym} @ ${usd(px)}${realized ? ` · ${signed(realized - comm)}` : ''}`);
+  toast(`${why ? why + ': ' : ''}${side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${ses.sym} @ ${px$(px)}${realized ? ` · ${signed(realized - comm)}` : ''}`);
   persist(); render(); drawLines();
 }
 
 function marketPx(side) {
-  const slip = S.settings.slip;
-  return round(side === 'buy' ? price + slip : Math.max(0.0001, price - slip));
+  const slip = isCoin() ? price * 0.0005 : S.settings.slip;
+  return round(side === 'buy' ? price + slip : Math.max(price / 2, price - slip));
 }
 
 function submit(o) {
@@ -111,13 +126,13 @@ function submit(o) {
   if (o.type === 'market') {
     if (!running()) return toast(ses.mode === 'live' ? 'Not connected' : 'Replay is not running — press ▶ or load a day');
     const px = marketPx(o.side);
-    if (o.qty > maxQty(o.side, px)) return toast(`Not enough buying power (max ${maxQty(o.side, px)} shares)`);
+    if (o.qty > maxQty(o.side, px)) return toast(`Not enough buying power (max ${maxQty(o.side, px)} ${unit()})`);
     fill(o.side, o.qty, px);
     addBracket(o);
   } else {
     if (!(o.price > 0)) return toast('Enter an order price');
     ses.orders.push({ id: orderSeq++, side: o.side, type: o.type, qty: o.qty, price: round(o.price), sl: o.sl, tp: o.tp });
-    toast(`${o.type} ${o.side} ${o.qty} @ ${usd(o.price)} placed`);
+    toast(`${o.type} ${o.side} ${o.qty} @ ${px$(o.price)} placed`);
     persist(); render(); drawLines();
   }
 }
@@ -169,7 +184,7 @@ function onTick(p) {
 
 // ---------- session lifecycle ----------
 function newSession(mode, sym, replay) {
-  ses = { mode, sym, pos: { qty: 0, avg: 0 }, orders: [], lastPrice: 0, dayStartEquity: S.cash, markers: [], replay: replay || null };
+  ses = { mode, sym, crypto: isCrypto(sym), pos: { qty: 0, avg: 0 }, orders: [], lastPrice: 0, dayStartEquity: S.cash, markers: [], replay: replay || null };
   price = 0; barTime = 0;
   candles.setData([]); vols.setData([]); candles.setMarkers([]);
   persist(); drawLines(); render();
@@ -242,12 +257,89 @@ async function fetchBars(sym, month, interval, demo) {
   return bars;
 }
 
+// Binance klines for [startMs, endMs), paged 1000 at a time. Past days are cached; today isn't.
+const BINANCE = ['https://data-api.binance.vision', 'https://api.binance.com'];
+async function binance(path) {
+  let err;
+  for (const host of BINANCE) {
+    try {
+      const r = await fetch(host + path);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j && j.msg ? `Binance: ${j.msg}` : `Binance request failed (${r.status})`);
+      return j;
+    } catch (e) { err = e; }
+  }
+  throw err;
+}
+async function fetchKlines(sym, interval, startMs, endMs) {
+  const out = [];
+  for (let t = startMs; t < endMs;) {
+    const k = await binance(`/api/v3/klines?symbol=${pair(sym)}&interval=${interval}&startTime=${t}&endTime=${endMs - 1}&limit=1000`);
+    if (!k.length) break;
+    for (const b of k) out.push([b[0] / 1000, +b[1], +b[2], +b[3], +b[4], Math.round(+b[5])]);
+    t = k[k.length - 1][0] + 1;
+    if (k.length < 1000) break;
+  }
+  return out;
+}
+
+const todayUTC = () => Math.floor(Date.now() / 86400e3);
+function cryptoDays() {
+  const sel = $('#day'), t = todayUTC(); sel.innerHTML = '';
+  for (let d = t; d > t - 30; d--) sel.add(new Option(d === t ? 'Today (so far)' : d === t - 1 ? `Yesterday · ${nyDate(d * 86400)}` : nyDate(d * 86400), d));
+  sel.disabled = false; $('#btn-random').disabled = false;
+}
+
+async function loadCryptoDay(day, resumeAt) {
+  pause();
+  const interval = ses.replay.interval === '5min' ? '5m' : '1m', barSec = interval === '5m' ? 300 : 60;
+  const key = `bn:${ses.sym}:${day}:${interval}`;
+  chartMsg(`Loading ${ses.sym} ${nyDate(day * 86400)}…`);
+  let bars = day < todayUTC() ? cacheGet(key, '') : null;
+  try {
+    if (!bars) {
+      bars = await fetchKlines(ses.sym, interval, (day * 86400 - 240 * barSec) * 1000, Math.min((day + 1) * 86400e3, Date.now()));
+      if (day < todayUTC() && bars.length) cachePut(key, bars);
+    }
+  } catch (e) { chartMsg(''); toast(e.message || 'Could not reach Binance', 6000); return false; }
+  chartMsg('');
+  if (!bars.some(b => Math.floor(b[0] / 86400) === day)) { toast(`No ${ses.sym} trading data for that day`, 5000); return false; }
+  R.bars = bars; R.barSec = barSec; R.days = [day - 1, day];
+  startDay(day, resumeAt);
+  return true;
+}
+
+async function loadCrypto(sym, resume) {
+  if (!resume && !confirmLeave()) return;
+  pause();
+  cryptoDays();
+  $('#sym').value = sym;
+  if (resume) {
+    $('#day').value = ses.replay.day;
+    if (!(await loadCryptoDay(+ses.replay.day, ses.replay.i))) { ses.replay = null; flatten('Closed (data unavailable)'); }
+    return;
+  }
+  newSession('replay', sym, { crypto: true, interval: $('#interval').value, day: 0, i: 0 });
+  const day = todayUTC() - 1;
+  $('#day').value = day;
+  loadCryptoDay(day);
+}
+
+function goDay(day) {
+  if (!confirmLeave()) { $('#day').value = ses.replay.day; return; }
+  if (ses.replay.crypto) loadCryptoDay(day); else startDay(day);
+}
+
 async function loadReplay(demo, resume) {
+  if (!demo) {
+    const sym = resume ? ses.sym : $('#sym').value.trim().toUpperCase();
+    if (isCrypto(sym)) return loadCrypto(sym, resume);
+  }
   const sym = demo ? 'IBM' : $('#sym').value.trim().toUpperCase();
   const month = demo ? '2009-01' : $('#month').value;
   const interval = demo ? '5min' : $('#interval').value;
   if (!sym) return toast('Enter a symbol');
-  if (!demo && !S.keys.av && !resume) { openSettings(); return toast('Add a free Alpha Vantage key first (or try the IBM demo)', 4000); }
+  if (!demo && !S.keys.av && !resume) { openSettings(); return toast('US stocks need a free Alpha Vantage key. Meme coins (DOGE, PEPE…) work without one.', 5000); }
   if (!resume && !confirmLeave()) return;
   pause();
   chartMsg(`Loading ${sym} ${month}…`);
@@ -300,13 +392,14 @@ function startDay(day, resumeAt) {
   if (last) { price = last.close; barTime = last.time; }
   else { price = R.day[0][1]; barTime = R.day[0][0]; }
   ses.lastPrice = price;
+  setDec(price);
   chart.timeScale().scrollToRealTime();
   $('#btn-play').disabled = false; $('#btn-step').disabled = false;
   $('#day').value = day;
   persist(); drawLines(); render();
   if (realtime()) {
     play();
-    if (!resumeAt) toast(`${ses.sym} · ${nyDate(day * 86400)} — market open, full day takes ${dayLen() < 390 ? dayLen() + ' min' : '6.5 h'}`, 4000);
+    if (!resumeAt) toast(`${ses.sym} · ${nyDate(day * 86400)} — ${isCoin() ? 'replaying 24 h' : 'market open'}, full day takes ${dayLen() + ' min'}`, 4000);
   } else if (!resumeAt) chartMsg(`<b>${ses.sym} · ${nyDate(day * 86400)}</b><br>${ctx.length ? 'Previous session shown for context. ' : ''}Press ▶ to ring the opening bell.`);
 }
 
@@ -342,8 +435,8 @@ function replayTick() {
 function schedule() {
   clearTimeout(R.timer);
   if (!R.playing) return;
-  // Auto-play stretches the whole 6.5-hour session (390 min) over the chosen day length.
-  const speed = realtime() ? 390 / dayLen() : +$('#speed').value;
+  // Auto-play stretches a whole session (6.5 h for stocks, 24 h for coins) over the chosen day length; 0 means real speed.
+  const speed = realtime() ? (dayLen() ? (isCoin() ? 1440 : 390) / dayLen() : 1) : +$('#speed').value;
   const ms = Math.max(16, R.barSec * 1000 / speed / STEPS);
   R.timer = setTimeout(() => { replayTick(); schedule(); }, ms);
 }
@@ -359,7 +452,8 @@ function endOfDay() {
   ses.orders = [];
   flatten('Market close');
   const pnl = equity() - ses.dayStartEquity;
-  chartMsg(`<b>Closing bell</b><br>Day result: <span class="${cls(pnl)}">${signed(pnl)}</span><br>Positions are closed at 16:00. Pick another day to keep practicing.`);
+  const caughtUp = isCoin() && ses.replay.day === todayUTC();
+  chartMsg(`<b>${caughtUp ? 'You reached the present' : isCoin() ? 'End of day (00:00 UTC)' : 'Closing bell'}</b><br>Day result: <span class="${cls(pnl)}">${signed(pnl)}</span><br>${caughtUp ? 'Switch to <b>Live</b> to keep trading real-time prices.' : 'Positions are closed at the end of the day. Pick another day to keep practicing.'}`);
   $('#btn-play').disabled = true; $('#btn-step').disabled = true;
   persist(); render(); drawLines();
 }
@@ -371,7 +465,7 @@ function running() {
 }
 
 // ---------- live (Finnhub) ----------
-const L = { ws: null, poll: 0, polling: false, bar: null, lastTrade: 0, prevClose: 0 };
+const L = { ws: null, poll: 0, polling: false, bar: null, lastTrade: 0, prevClose: 0, tsec: null, gotTrade: false };
 const nyFmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' });
 function nySec(ms) {
   const p = Object.fromEntries(nyFmt.formatToParts(new Date(ms)).map(x => [x.type, x.value]));
@@ -383,17 +477,18 @@ function marketOpen() {
 }
 
 function liveDisconnect() {
-  if (L.ws) { L.ws.onclose = null; L.ws.close(); }
+  if (L.ws) { const ws = L.ws; L.ws = null; ws.onclose = null; ws.close(); }
   L.ws = null; clearInterval(L.poll); L.polling = false;
   $('#btn-connect').textContent = 'Connect';
 }
 
 async function liveConnect() {
   if (L.ws || L.polling) { liveDisconnect(); $('#live-status').textContent = 'Disconnected'; return; }
-  const key = S.keys.fh;
-  if (!key) { openSettings(); return toast('Add a free Finnhub key first', 4000); }
   const sym = $('#sym').value.trim().toUpperCase();
   if (!sym) return toast('Enter a symbol');
+  if (isCrypto(sym)) return liveCrypto(sym);
+  const key = S.keys.fh;
+  if (!key) { openSettings(); return toast('US stocks need a free Finnhub key. Meme coins work without one.', 5000); }
   const resume = ses && ses.mode === 'live' && ses.sym === sym;
   if (!resume && !confirmLeave()) return;
   let q;
@@ -405,7 +500,7 @@ async function liveConnect() {
   const today = Math.floor(nySec(Date.now()) / 86400);
   if (ses.liveDay !== today) { ses.liveDay = today; ses.dayStartEquity = S.cash + ses.pos.qty * q.c * RATE; }
   ses.markers = []; // the chart restarts empty, so old markers have no bars to sit on
-  L.prevClose = q.pc; L.bar = null;
+  L.prevClose = q.pc; L.bar = null; L.tsec = nySec; setDec(q.c);
   candles.setData([]); vols.setData([]); candles.setMarkers([]);
   liveTrade(q.c, 0, q.t ? q.t * 1000 : Date.now());
   L.polling = true; // quote polling keeps the price honest even if the socket goes quiet
@@ -434,9 +529,44 @@ async function pollQuote() {
 }
 
 let liveRaf = 0;
+async function liveCrypto(sym) {
+  const resume = ses && ses.mode === 'live' && ses.sym === sym;
+  if (!resume && !confirmLeave()) return;
+  let hist, t24;
+  try {
+    [hist, t24] = await Promise.all([
+      fetchKlines(sym, '1m', Date.now() - 300 * 60e3, Date.now()),
+      binance(`/api/v3/ticker/24hr?symbol=${pair(sym)}`),
+    ]);
+  } catch (e) { return toast(e.message || 'Could not reach Binance', 5000); }
+  if (!hist.length) return toast(`No data for ${sym}`, 5000);
+  if (!resume) newSession('live', sym);
+  const today = todayUTC();
+  const last = hist[hist.length - 1];
+  if (ses.liveDay !== today) { ses.liveDay = today; ses.dayStartEquity = S.cash + ses.pos.qty * last[4] * RATE; }
+  ses.markers = [];
+  L.prevClose = +t24.openPrice; L.tsec = ms => ms / 1000;
+  setDec(last[4]);
+  const bars = hist.map(b => ({ time: b[0], open: b[1], high: b[2], low: b[3], close: b[4], volume: b[5] }));
+  candles.setData(bars); vols.setData(bars.map(volBar)); candles.setMarkers([]);
+  L.bar = bars.pop();
+  price = last[4]; barTime = L.bar.time; ses.lastPrice = price;
+  const open = (i) => {
+    const ws = new WebSocket(`${i ? 'wss://stream.binance.com:9443' : 'wss://data-stream.binance.vision'}/ws/${pair(sym).toLowerCase()}@aggTrade`);
+    L.ws = ws;
+    ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (_) { return; } if (m.p) liveTrade(+m.p, +m.q, m.T); };
+    ws.onclose = () => { if (L.ws !== ws) return; if (!i && !L.gotTrade) return open(1); L.ws = null; $('#btn-connect').textContent = 'Connect'; $('#live-status').textContent = 'Connection closed — press Connect'; };
+  };
+  L.gotTrade = false; open(0);
+  $('#btn-connect').textContent = 'Disconnect';
+  $('#live-status').textContent = 'Crypto trades 24/7 — streaming real-time trades';
+  chartMsg(''); persist(); render();
+}
+
 function liveTrade(p, v, ms, fromPoll) {
+  L.gotTrade = true;
   if (!fromPoll) L.lastTrade = Date.now();
-  const t = nySec(ms), minute = t - t % 60;
+  const t = Math.floor(L.tsec(ms)), minute = t - t % 60;
   if (!L.bar || minute > L.bar.time) L.bar = { time: minute, open: p, high: p, low: p, close: p, volume: 0 };
   else if (minute < L.bar.time) return; // late print
   const b = L.bar;
@@ -457,14 +587,14 @@ function render() {
   $('#st-total').textContent = signed(tot); $('#st-total').className = cls(tot);
 
   $('#q-sym').textContent = ses ? ses.sym : '—';
-  $('#q-price').textContent = price ? usd(price) : '—';
+  $('#q-price').textContent = price ? px$(price) : '—';
   const ref = ses && (ses.mode === 'replay' ? R.prevClose : L.prevClose);
   if (price && ref) {
     const ch = price - ref;
-    $('#q-chg').textContent = `${ch >= 0 ? '+' : ''}${ch.toFixed(2)} (${(ch / ref * 100).toFixed(2)}%)`;
+    $('#q-chg').textContent = `${ch >= 0 ? '+' : ''}${ch.toFixed(pxDec)} (${(ch / ref * 100).toFixed(2)}%)`;
     $('#q-chg').className = cls(ch);
   } else $('#q-chg').textContent = '';
-  $('#q-time').textContent = barTime ? `${nyDate(barTime)} · ${nyTime(barTime)} NY` : '';
+  $('#q-time').textContent = barTime ? `${nyDate(barTime)} · ${nyTime(barTime)} ${tz()}` : '';
 
   // position
   const pos = $('#pos');
@@ -472,7 +602,7 @@ function render() {
     const p = ses.pos, upnl = p.qty * (price - p.avg) * RATE;
     pos.className = '';
     pos.innerHTML = `<span>${p.qty > 0 ? 'Long' : 'Short'}</span><span>${Math.abs(p.qty)} ${ses.sym}</span>
-      <span>Avg price</span><span>${usd(p.avg)}</span>
+      <span>Avg price</span><span>${px$(p.avg)}</span>
       <span>Value</span><span>${sar(posValueSAR(p.qty, price))}</span>
       <span>Unrealized</span><span class="${cls(upnl)}">${signed(upnl)}</span>`;
     $('#btn-flat').hidden = false;
@@ -486,7 +616,7 @@ function render() {
     ul.innerHTML = ses && ses.orders.length ? '' : '<li class="muted">None</li>';
     if (ses) for (const o of ses.orders) {
       const li = document.createElement('li');
-      li.innerHTML = `<span class="${o.side === 'buy' ? 'up' : 'down'}">${o.tag || o.type} ${o.side} ${o.qty} @ ${usd(o.price)}</span>`;
+      li.innerHTML = `<span class="${o.side === 'buy' ? 'up' : 'down'}">${o.tag || o.type} ${o.side} ${o.qty} @ ${px$(o.price)}</span>`;
       const x = document.createElement('button'); x.textContent = '✕'; x.title = 'Cancel'; x.onclick = () => cancelOrder(o.id);
       li.append(x); ul.append(li);
     }
@@ -501,7 +631,7 @@ function renderLog() {
   $('#log').innerHTML = S.log.slice(0, 200).map(f => `<tr>
     <td>${f.t ? new Date(f.t * 1000).toISOString().slice(5, 16).replace('T', ' ') : ''}</td><td>${f.sym}</td>
     <td class="${f.side === 'buy' ? 'up' : 'down'}">${f.side}${f.why ? ` <span class="muted">(${f.why})</span>` : ''}</td>
-    <td>${f.qty}</td><td>${usd(f.px)}</td>
+    <td>${f.qty.toLocaleString('en-US')}</td><td>${usd(f.px, f.px < 1 ? Math.min(10, Math.ceil(-Math.log10(f.px)) + 3) : 2)}</td>
     <td class="${f.closing ? cls(f.realized) : 'muted'}">${f.closing ? signed(f.realized) : '—'}</td></tr>`).join('')
     || '<tr><td colspan="6" class="muted">No trades yet.</td></tr>';
   const closes = S.log.filter(f => f.closing);
@@ -530,8 +660,8 @@ function ticketOrder(sideOverride) {
 }
 function updateEstimate() {
   const o = ticketOrder(), px = o.type === 'market' ? price : (o.price || price);
-  if (!px || !(o.qty > 0)) { $('#est').textContent = ses ? `Max ${maxQty(side, price)} shares` : '—'; return; }
-  $('#est').textContent = `≈ ${usd(o.qty * px)} = ${sar(o.qty * px * RATE)} · max ${maxQty(side, px)} shares`;
+  if (!px || !(o.qty > 0)) { $('#est').textContent = ses ? `Max ${maxQty(side, price)} ${unit()}` : '—'; return; }
+  $('#est').textContent = `≈ ${usd(o.qty * px)} = ${sar(o.qty * px * RATE)} · max ${maxQty(side, px).toLocaleString('en-US')} ${unit()}`;
 }
 
 // ---------- settings ----------
@@ -589,20 +719,21 @@ $$('#side button').forEach(b => b.onclick = () => setSide(b.dataset.side));
 $('#otype').onchange = () => { $('#px-row').hidden = $('#otype').value === 'market'; if (!$('#opx').value && price) $('#opx').value = price; updateEstimate(); };
 ['#oqty', '#opx'].forEach(s => $(s).addEventListener('input', updateEstimate));
 $$('.chips button').forEach(b => b.onclick = () => {
-  const o = ticketOrder(), px = o.type === 'market' ? price : (o.price || price);
-  $('#oqty').value = Math.max(0, Math.floor(maxQty(side, px) * +b.dataset.pct / 100)); updateEstimate();
+  // Market orders fill with slippage and the price keeps moving, so "Max" keeps a 1% cushion.
+  const o = ticketOrder(), mkt = o.type === 'market', px = mkt ? marketPx(side) : (o.price || price);
+  $('#oqty').value = Math.max(0, Math.floor(maxQty(side, px) * +b.dataset.pct / 100 * (mkt ? 0.99 : 1))); updateEstimate();
 });
 $('#btn-submit').onclick = () => submit(ticketOrder());
 $('#btn-flat').onclick = () => flatten('Closed');
 $('#btn-settings').onclick = openSettings;
 $('#btn-load').onclick = () => loadReplay(false);
-$('#btn-demo').onclick = () => loadReplay(true);
-$('#day').onchange = () => { if (confirmLeave()) startDay(+$('#day').value); else $('#day').value = ses.replay.day; };
-$('#btn-random').onclick = () => { if (confirmLeave()) startDay(R.days[Math.floor(Math.random() * R.days.length)]); };
+$('#day').onchange = () => goDay(+$('#day').value);
+$('#btn-random').onclick = () => { const o = [...$('#day').options]; goDay(+o[Math.floor(Math.random() * o.length)].value); };
 $('#btn-play').onclick = () => (R.playing ? pause() : play());
 $('#btn-step').onclick = () => { pause(); stepBar(); };
 $('#speed').onchange = schedule;
 $('#btn-connect').onclick = liveConnect;
+$('#sym').addEventListener('input', () => { $('#month').hidden = isCrypto($('#sym').value.trim().toUpperCase()); });
 $('#sym').addEventListener('keydown', e => { if (e.key === 'Enter') ($('#live-ctl').hidden ? loadReplay(false) : liveConnect()); });
 
 document.addEventListener('keydown', e => {
@@ -618,19 +749,20 @@ setInterval(() => setSide(side), 1000); // keep Buy/Cover label in sync with the
 // ---------- boot ----------
 monthOptions();
 applyRealtime();
+$('#month').hidden = isCrypto($('#sym').value.trim().toUpperCase());
 renderLog();
 if (ses && ses.mode === 'replay' && ses.replay) {
-  $('#month').value = ses.replay.month; $('#interval').value = ses.replay.interval; $('#sym').value = ses.sym;
+  $('#month').value = ses.replay.month || $('#month').value; $('#interval').value = ses.replay.interval; $('#sym').value = ses.sym; $('#month').hidden = !!ses.crypto;
   loadReplay(ses.replay.demo, true);
 } else if (ses && ses.mode === 'live') {
-  setMode('live'); $('#sym').value = ses.sym;
+  setMode('live'); $('#sym').value = ses.sym; setDec(ses.lastPrice || 1);
   chartMsg('Press <b>Connect</b> to resume live trading.');
 } else {
-  chartMsg(`<b>Practice day trading with real US market data.</b><br><br>
+  chartMsg(`<b>Practice day trading with real market data.</b><br><br>
     You start with <b>10,000 SAR</b> (1 USD = 3.75 SAR).<br><br>
-    <b>Replay</b>: trade a real past session, bar by bar, at any hour.<br>
-    <b>Live</b>: trade real-time prices while the US market is open.<br><br>
-    Add your free API keys in ⚙ Settings, or hit <b>Try IBM demo</b> now.`);
+    <b>Meme coins</b> (DOGE, PEPE, SHIB, BONK, WIF…): no key needed, 24/7, data up to right now.<br>
+    <b>US stocks</b>: add free API keys in ⚙ Settings.<br><br>
+    Press <b>Load</b> to replay yesterday, or switch to <b>Live</b>.`);
 }
 setSide('buy');
 render();
